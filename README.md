@@ -6,5 +6,5 @@ analysis of the structure and dynamics of T cell receptor repertoires"
 directory **data/**: Datasets 1--3 are found in data as RData objects under folder 
 
 ## Code to reproduce analyses and recreate figures
-directory **src/**: Code for the analysis of Dataset 1--3 are found in 
-individual folders (D1--D3)
+directory **src/**: Code for the analysis of Dataset 1--3 are found under
+the respective folders: Dataset 1, Dataset 2, and Dataset 3.

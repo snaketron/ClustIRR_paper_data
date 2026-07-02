@@ -1,0 +1,617 @@
+---
+title: "Manuscript figures RT"
+author: "SK"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+editor_options: 
+  markdown: 
+    wrap: 65
+---
+
+```{r}
+library(ggplot2)
+ggplot2::theme_set(new = theme_bw(base_size = 10))
+library(dplyr)
+library(ggforce)
+dir.create("manuscript")
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+require(rstan)
+rstan_options(auto_write = TRUE)
+require(patchwork)
+```
+
+
+```{r}
+get_hdi <- function(vec, hdi_level) {
+    sortedPts <- sort(vec)
+    ciIdxInc <- floor(hdi_level * length(sortedPts))
+    nCIs = length(sortedPts) - ciIdxInc
+    ciWidth = rep(0 , nCIs)
+    for (i in 1:nCIs) {
+        ciWidth[i] = sortedPts[i + ciIdxInc] - sortedPts[i]
+    }
+    HDImin = sortedPts[which.min(ciWidth)]
+    HDImax = sortedPts[which.min(ciWidth) + ciIdxInc]
+    HDIlim = c(HDImin, HDImax)
+    return(HDIlim)
+}
+```
+
+
+
+```{r}
+# node_summary files for each patients
+ns <- list.files(path = "", pattern = "ns\\.RData", full.names = T, recursive = T)
+
+read_ns <- function(x) {
+    ns <- get(load(file = x))
+    return(ns)
+}
+
+ns <- lapply(X = ns, FUN = read_ns)
+ns <- do.call(rbind, ns)
+```
+
+
+```{r}
+# format ns
+w <- do.call(rbind, strsplit(x = ns$sample, split = "_"))
+ns$response <- w[,2]
+ns$patient <- w[,1]
+ns$t <- w[,4]
+ns$depth <- 1
+ns$general_response <- "NE"
+ns$general_response[ns$response %in% c("CR", "PR")] <- "CR/PR"
+ns$general_response[ns$response %in% c("SD", "PD")] <- "SD/PD"
+ns$t_num <- as.numeric(gsub(pattern = "Day", replacement = '', x = ns$t))
+ns$t_fac <- factor(x = ns$t_num, levels = sort(unique(ns$t_num)))
+ns$key <- paste0(ns$community, "_", ns$patient)
+rm(w)
+```
+
+
+
+```{r}
+# beta coefficients for each patient
+bs <- list.files(path = "results/", pattern = "beta\\.RData", 
+                 full.names = T, recursive = T)
+
+read_raw_betas <- function(x) {
+    beta <- get(load(file = x))
+    return(beta)
+}
+
+betas_raw <- lapply(X = bs, FUN = read_raw_betas)
+betas_raw <- do.call(rbind, betas_raw)
+```
+
+
+```{r}
+# format betas
+w <- do.call(rbind, strsplit(x = betas_raw$sample, split = "_"))
+betas_raw$response <- w[,2]
+betas_raw$patient <- w[,1]
+betas_raw$t <- w[,4]
+betas_raw$depth <- 1
+betas_raw$general_response <- "NE"
+betas_raw$general_response[betas_raw$response %in% c("CR", "PR")] <- "CR/PR"
+betas_raw$general_response[betas_raw$response %in% c("SD", "PD")] <- "SD/PD"
+betas_raw$t_num <- as.numeric(gsub(pattern = "Day", replacement = '', x = betas_raw$t))
+betas_raw$t_fac <- factor(x = betas_raw$t_num, levels = sort(unique(betas_raw$t_num)))
+betas_raw$key <- paste0(betas_raw$community, "_", betas_raw$patient)
+rm(w)
+```
+
+
+```{r}
+# compute overlap baseline vs day 22
+read_betas <- function(x) {
+    beta <- get(load(file = x))
+    
+    j_22 <- which(regexpr(pattern = "Day22", text = beta$sample)!=-1)
+    j_0 <- which(regexpr(pattern = "Day0", text = beta$sample)!=-1)
+    
+    beta_22 <- beta[j_22,]
+    beta_0 <- beta[j_0,]
+    o <- (apply(X = cbind(beta_22$L95, beta_0$L95, beta_22$H95, beta_0$H95),
+                MARGIN = 1, FUN = function(x) {
+                    return(max(x[1],x[2])<= min(x[3], x[4]))
+                }))
+    
+    beta_0 <- beta_0[,c("mean", "L95", "H95", "community", "sample")]
+    colnames(beta_0) <- c("mean_D0", "L95_D0", "H95_D0", "community", "sample")
+    beta_22 <- beta_22[,c("mean", "L95", "H95")]
+    colnames(beta_22) <- c("mean_D22", "L95_D22", "H95_D22")
+    beta <- cbind(beta_0, beta_22)
+    beta$overlap <- o
+    beta$expanding <- beta$mean_D0<beta$mean_D22
+    
+    rm(beta_22, beta_0)
+    return(beta)
+}
+
+betas <- lapply(X = bs, FUN = read_betas)
+betas <- do.call(rbind, betas)
+```
+
+
+```{r}
+# format beta overlaps
+w <- do.call(rbind, strsplit(x = betas$sample, split = "_"))
+betas$response <- w[,2]
+betas$patient <- w[,1]
+betas$t <- w[,4]
+betas$depth <- 1
+betas$general_response <- "NE"
+betas$general_response[betas$response %in% c("CR", "PR")] <- "CR/PR"
+betas$general_response[betas$response %in% c("SD", "PD")] <- "SD/PD"
+betas$expanding <- ifelse(test = betas$expanding, yes = "E", no = "C")
+betas$key <- paste0(betas$community, "_", betas$patient)
+rm(w)
+```
+
+
+```{r}
+# count expanding/contracting coms
+os <- aggregate(!overlap~general_response+response+patient+expanding, data = betas, FUN = sum)
+depth <- aggregate(depth~response+patient, data = betas, FUN = sum)
+os <- merge(x = depth, y = os, by = c("response", "patient"))
+rm(depth)
+```
+
+
+
+```{r}
+# do modeling
+model <- rstan::stan_model(file = "dac_enrichment.stan")
+
+w <- os[os$general_response != "NE",]
+w$group <- paste0(w$general_response, "-", w$expanding)
+w$g <- as.numeric(as.factor(w$group))
+fit <- rstan::sampling(object = model,
+                       data = list(N = nrow(w),
+                                   y = w$`!overlap`,
+                                   n = w$depth,
+                                   g = w$g))
+
+s <- data.frame(summary(fit, par = "phat_group")$summary)
+s$g <- 1:nrow(s)
+s <- s[, c("mean", "X2.5.", "X97.5.", "g")]
+colnames(s)[1:3] <- paste0("mu_", colnames(s)[1:3])
+
+y <- data.frame(summary(fit, par = "yhat_group")$summary)
+y <- y[, c("mean", "X2.5.", "X97.5.")]
+colnames(y) <- paste0("phat_", colnames(y))
+
+s <- cbind(s, y)
+rm(y)
+s <- merge(x = s, y = w[duplicated(w$g)==F, c("g", "general_response", "expanding")], by = "g")
+```
+
+
+
+# Supplement 1
+
+```{r, fig.width=3, fig.height=3}
+g_f <- ggplot(data = os[os$response != "NE",])+
+    geom_point(aes(x = general_response, y = `!overlap`, col = expanding),
+               size = 0.5, position = position_jitterdodge(dodge.width = 0.9, 
+                                                           jitter.width = 0.55, 
+                                                           jitter.height = 0))+
+    scale_color_manual(name = "DAC", values = c("steelblue", "orange"))+
+    theme(legend.position = "top")+
+    xlab(label = "Response group")+
+    ylab(label = "DACs [count]")
+```
+
+
+```{r, fig.width=3, fig.height=3}
+g_p <- ggplot(data = os[os$response != "NE",])+
+    geom_errorbar(data = s, aes(x = general_response, y = 100*mu_mean, ymin = 100*mu_X2.5., 
+                                ymax = 100*mu_X97.5., group = expanding), width = 0.3,
+                  position = position_dodge(width = 0.9), size = 0.65, alpha = 0.75)+
+    geom_point(data = s, aes(x = general_response, y = 100*mu_mean, group = expanding),
+                  position = position_dodge(width = 0.9), size = 2, alpha = 0.75, 
+               shape = 21, fill = "white")+
+    geom_point(aes(x = general_response, y = 100*`!overlap`/depth, col = expanding),
+               size = 0.5, position = position_jitterdodge(dodge.width = 0.9, 
+                                                           jitter.width = 0.55, 
+                                                           jitter.height = 0))+
+    scale_color_manual(name = "DAC", values = c("steelblue", "orange"))+
+    theme(legend.position = "top")+
+    xlab(label = "Response group")+
+    ylab(label = "DACs [%]")
+```
+
+
+```{r, fig.width=3, fig.height=3}
+g_phat <- ggplot(data = os[os$response != "NE",])+
+    geom_errorbar(data = s, aes(x = general_response, y = 100*phat_mean, ymin = 100*phat_X2.5., 
+                                ymax = 100*phat_X97.5., group = expanding), width = 0.3,
+                  position = position_dodge(width = 0.9), size = 0.65, alpha = 0.75)+
+    geom_point(data = s, aes(x = general_response, y = 100*phat_mean, group = expanding),
+                  position = position_dodge(width = 0.9), size = 2, alpha = 0.75, 
+               shape = 21, fill = "white")+
+    geom_point(aes(x = general_response, y = 100*`!overlap`/depth, col = expanding),
+               size = 0.5, position = position_jitterdodge(dodge.width = 0.9, 
+                                                           jitter.width = 0.55, 
+                                                           jitter.height = 0))+
+    scale_color_manual(name = "DAC", values = c("steelblue", "orange"))+
+    theme(legend.position = "top")+
+    xlab(label = "Response group")+
+    ylab(label = "DACs [%]")
+```
+
+
+```{r, fig.width=6, fig.height=2.5}
+g_sup_1 <- g_f|g_p
+rm(g_f, g_p, g_phat)
+```
+
+
+```{r}
+ggsave(filename = "SFig_1.pdf",
+       plot = g_sup_1,
+       device = "pdf",
+       width = 6,
+       height = 3)
+```
+
+
+# Figure 3a
+
+```{r, fig.width=3, fig.height=3}
+fig_3a <- ggplot(data = os[os$response != "NE",])+
+    geom_errorbar(data = s, aes(x = general_response, y = 100*mu_mean, ymin = 100*mu_X2.5., 
+                                ymax = 100*mu_X97.5., group = expanding), width = 0.3,
+                  position = position_dodge(width = 0.9), size = 0.65, alpha = 0.75)+
+    geom_point(data = s, aes(x = general_response, y = 100*mu_mean, group = expanding),
+                  position = position_dodge(width = 0.9), size = 2, alpha = 0.75, 
+               shape = 21, fill = "white")+
+    geom_point(aes(x = general_response, y = 100*`!overlap`/depth, col = expanding),
+               size = 0.5, position = position_jitterdodge(dodge.width = 0.9, 
+                                                           jitter.width = 0.55, 
+                                                           jitter.height = 0))+
+    scale_color_manual(name = "DAC", values = c("steelblue", "orange"))+
+    theme(legend.position = "top")+
+    xlab(label = "Response group")+
+    ylab(label = "DACs [%]")
+```
+
+
+# Figure 3b
+
+```{r}
+pd <- position_dodge(width = 0.4)
+
+x <- betas_raw[betas_raw$key %in% betas$key[betas$patient == "Pt4" & betas$expanding == "C" & betas$overlap==F],]
+x$tumor <- ifelse(test = x$key %in% ns$key[ns$tumor=="T+"], yes = "T+", no = "T-")
+
+g_c <- ggplot(data = x)+
+    facet_wrap(~paste0(patient, " contracting"))+
+    geom_line(aes(x = t_fac, y = mean, group = key, col = tumor), 
+              position = pd, linewidth = 0.3, alpha = 0.3)+
+    geom_errorbar(aes(x = t_fac, y = mean, ymin = L95, ymax = H95, group = key, 
+                      col = tumor), width = 0, position = pd, alpha = 0.15)+
+    geom_point(aes(x = t_fac, y = mean, group = key, col = tumor), position = pd, 
+               size = 0.7, alpha = 0.8)+
+    xlab(label = "Time")+
+    ylab(label = expression(beta))+
+    theme(legend.position = "top", 
+          strip.text.x = element_text(margin = margin(0.07,0,0.07,0, "cm")))+
+    scale_x_discrete(expand = c(0.05, 0.05))+
+    scale_color_manual(name = "Tumor", values = c("T+"="red", "T-"="black"))
+
+x <- betas_raw[betas_raw$key %in% betas$key[betas$patient == "Pt4" & betas$expanding == "E" & betas$overlap==F],]
+x$tumor <- ifelse(test = x$key %in% ns$key[ns$tumor=="T+"], yes = "T+", no = "T-")
+
+g_e <- ggplot(data = x)+
+    facet_wrap(~paste0(patient, " expanding"))+
+    geom_line(aes(x = t_fac, y = mean,  group = key, col = tumor), 
+              position = pd, linewidth = 0.3, alpha = 0.3)+
+    geom_errorbar(aes(x = t_fac, y = mean, ymin = L95, ymax = H95, group = key, 
+                      col = tumor), width = 0, position = pd, alpha = 0.15)+
+    geom_point(aes(x = t_fac, y = mean, group = key, col = tumor), position = pd, 
+               size = 0.7, alpha = 0.8)+
+    xlab(label = "Time")+
+    ylab(label = expression(beta))+
+    theme(legend.position = "top", 
+          strip.text.x = element_text(margin = margin(0.07,0,0.07,0, "cm")))+
+    scale_x_discrete(expand = c(0.05, 0.05))+
+    scale_color_manual(name = "Tumor", values = c("T+"="red", "T-"="black"))
+
+
+q <- ns[ns$community %in% x$community[x$tumor=="T+"],]
+table(q$community, q$t_fac)
+rm(x, pd)
+```
+
+
+```{r, fig.width=6, fig.height=4}
+fig_3b <- g_e|g_c
+fig_3b
+rm(g_e, g_c)
+```
+
+
+```{r, fig.width=6, fig.height=2.5}
+fig_3 <- (fig_3a|fig_3b)+patchwork::plot_layout(widths = c(1,4))
+fig_3
+```
+
+
+```{r, fig.width=5, fig.height=3.5}
+rm(fig_3a, fig_3b)
+```
+
+
+
+```{r, fig.width=6.5, fig.height=6}
+ggsave(filename = "Fig_3.pdf",
+       plot = fig_3,
+       device = "pdf",
+       width = 7.5,
+       height = 2.5)
+```
+
+
+
+
+# Supplement 2
+
+```{r}
+pd <- position_dodge(width = 0.4)
+
+x <- betas_raw[betas_raw$key %in% betas$key[betas$expanding == "C" & betas$overlap==F],]
+x$tumor <- ifelse(test = x$key %in% ns$key[ns$tumor=="T+"], yes = "+", no = "-")
+x$panel <- paste0(x$patient, " (", x$general_response, " )", " contracting")
+x_c <- x
+
+
+x <- betas_raw[betas_raw$key %in% betas$key[betas$expanding == "E" & betas$overlap==F],]
+x$tumor <- ifelse(test = x$key %in% ns$key[ns$tumor=="T+"], yes = "+", no = "-")
+x$panel <- paste0(x$patient, " (", x$general_response, " )", " expanding")
+x_e <- x
+
+x <- rbind(x_e, x_c)
+x$panel <- factor(x = x$panel, levels = sort(unique(x$panel)))
+g_sup_2 <- ggplot(data = x[x$general_response != "NE",])+
+    facet_wrap(~panel, ncol = 4, dir = "h")+
+    geom_line(aes(x = t_fac, y = mean, group = key, col = tumor), 
+              position = pd, linewidth = 0.3, alpha = 0.3)+
+    geom_errorbar(aes(x = t_fac, y = mean, ymin = L95, ymax = H95, group = key, 
+                      col = tumor), width = 0, position = pd, alpha = 0.15)+
+    geom_point(aes(x = t_fac, y = mean, group = key, col = tumor), position = pd, 
+               size = 0.5, alpha = 0.8)+
+    xlab(label = "Time")+
+    ylab(label = expression(beta))+
+    theme(legend.position = "top", 
+          strip.text.x = element_text(margin = margin(0.07,0,0.07,0, "cm")))+
+    scale_x_discrete(expand = c(0.05, 0.05))+
+    scale_color_manual(name = "Tumor", values = c("+"="red", "-"="black"))
+```
+
+
+```{r, fig.width=7, fig.height=6}
+g_sup_2
+```
+
+```{r}
+ggsave(filename = "SFig_2.pdf",
+       plot = g_sup_2,
+       device = "pdf",
+       width = 7,
+       height = 7)
+```
+
+
+
+
+# Supplement 3
+
+```{r, fig.width=4, fig.height=3}
+d <- data.frame(summary(fit, par = "d")$summary)
+d$contrast <- c("R(C)-R(E)",
+                "R(C)-NR(C)",
+                "R(C)-NR(E)",
+                "R(E)-NR(C)",
+                "R(E)-NR(E)",
+                "NR(C)-NR(E)")
+g_sup_3 <-  ggplot(data = d)+
+    geom_vline(xintercept = 0, linetype = "dashed")+
+    geom_errorbar(aes(x = mean*100, y = contrast, xmin = X2.5.*100, xmax = X97.5.*100), height = 0.1)+
+    geom_point(aes(x = mean*100, y = contrast))+
+    geom_text(aes(x = mean*100, y = contrast, label = paste0(round(mean*100, digits = 3), ", 95% HDI = [", 
+                                                             round(X2.5.*100, digits = 3), ", ",
+                                                             round(X97.5.*100, digits = 3), "]")), size = 2.5,
+              position = position_nudge(y = +0.35))+
+    xlab(label = "Absolute difference between group means")+
+    ylab(label = '')
+
+g_sup_3
+```
+
+
+```{r}
+ggsave(filename = "SFig_3.pdf",
+       plot = g_sup_3,
+       device = "pdf",
+       width = 4,
+       height = 3)
+```
+
+
+
+# Supplement 4
+
+```{r}
+# LOO analysis
+d_loo <- c()
+fit_loo <- vector(mode = "list", length = length(unique(w$patient)))
+names(fit_loo) <- unique(w$patient)
+for(pt in names(fit_loo)) {
+    tw <- w
+    tw <- tw[tw$patient != pt,]
+    fit_loo[[pt]] <- rstan::sampling(object = model,
+                       data = list(N = nrow(tw),
+                                   y = tw$`!overlap`,
+                                   n = tw$depth,
+                                   g = tw$g),
+                       control = list(adapt_delta = 0.99),
+                       refresh = -1)
+    
+    d <- data.frame(summary(fit_loo[[pt]], par = "d")$summary)
+    d$contrast <- c("R(C)-R(E)",
+                    "R(C)-NR(C)",
+                    "R(C)-NR(E)",
+                    "R(E)-NR(C)",
+                    "R(E)-NR(E)",
+                    "NR(C)-NR(E)")
+    d$loo <- pt
+    d_loo <- rbind(d_loo, d)
+}
+rm(tw, pt)
+```
+
+```{r, fig.width=4, fig.height=6}
+g_sup_4 <-  ggplot(data = d_loo)+
+    geom_vline(xintercept = 0, linetype = "dashed")+
+    geom_errorbar(aes(x = mean*100, y = contrast, xmin = X2.5.*100, xmax = X97.5.*100, group = loo), 
+                  height = 0.1, position = position_dodge(width = .8, orientation = "x"))+
+    geom_point(aes(x = mean*100, y = contrast, group = loo), 
+               position = position_dodge(width = .8, orientation = "x"))+
+    xlab(label = "Absolute difference between group means")+
+    ylab(label = '')
+
+g_sup_4
+```
+
+```{r}
+ggsave(filename = "SFig_4.pdf",
+       plot = g_sup_4,
+       device = "pdf",
+       width = 4,
+       height = 6)
+```
+
+
+# Figure 3c
+
+```{r}
+require(ggnetwork)
+require(ggrepel)
+require(igraph)
+
+graph <- get(load("Pt4/graph.RData"))
+
+x <- betas[betas$patient == "Pt4" & betas$overlap==FALSE, ]
+sg <- subgraph(graph = graph, vids = which(V(graph)$community %in% x$community))
+
+e <- igraph::as_data_frame(x = sg, what = "edges")
+e$i <- 1:nrow(e)
+n <- igraph::as_data_frame(x = sg, what = "vertices")
+e <- merge(x = e, y = n[, c("name", "community")], by.x = "from", by.y = "name")
+e <- merge(x = e, y = n[, c("name", "community")], by.x = "to", by.y = "name")
+edel <- e[e$community.x!=e$community.y,]
+edel$i
+edel$key <- paste0(edel$from, "|", edel$to)
+sg <- igraph::delete_edges(graph = sg, edel$i)
+
+rm(e, n, edel)
+```
+
+
+
+
+
+```{r, fig.width=7, fig.height=7}
+
+my_blues <- c(
+  "#3182bd",  # medium blue
+  "orange",  # dark-ish blue
+  "lightgreen",  # darker
+  "#2BAB2D",   # very dark blue
+  "#044405"
+)
+
+u <- ggnetwork(sg, layout = igraph::layout_components(sg))
+u$t_num <- as.numeric(gsub(pattern = "Day", replacement = '', x = u$timepoint))
+u$t_fac <- factor(x = u$t_num, levels = sort(unique(u$t_num)))
+```
+
+
+```{r}
+n <- ns[ns$sample %in% u$sample,]
+n <- aggregate(clone_size~sample, data = n, FUN = sum)
+n$depth <- n$clone_size
+n$clone_size <- NULL
+
+u <- merge(x = u, y = n, by = "sample", all.x = TRUE)
+u$p <- u$clone_size/u$depth
+u <- u[order(u$clone_size, decreasing = T),]
+
+# top clones
+lu <- u[duplicated(u$community)==F, ]
+lu <- merge(x = lu, y = x[,c("community", "expanding")], by = "community")
+```
+
+
+```{r, fig.width=7, fig.height=7}
+  
+g <- ggplot(u, aes(x = x, y = y, xend = xend, yend = yend))+
+    # facet_wrap(facets = ~community, scales = "free", ncol = 5)+
+    geom_edges(color = "darkgrey", linewidth = 0.15, alpha = 0.75)+
+    geom_nodes(aes(shape = tumor, size = p*100,
+                   color = t_fac), stroke = 0.1, alpha = 0.85)+
+    geom_text_repel(data = lu[lu$expanding == "E" & lu$tumor == "T-",],
+                    aes(x = x, y = y, label = CDR3b), color = "blue", size = 2, max.overlaps = 100,
+                    min.segment.length = 0, max.iter = 10^6)+
+    geom_text_repel(data = lu[lu$expanding == "C" & lu$tumor == "T-",],
+                    aes(x = x, y = y, label = CDR3b), color = "orange", size = 2, max.overlaps = 100,
+                    min.segment.length = 0, max.iter = 10^6)+
+    geom_text_repel(data = lu[lu$tumor == "T+",],
+                    aes(x = x, y = y, label = CDR3b), color = "red", size = 2, max.overlaps = 100,
+                    min.segment.length = 0, max.iter = 10^6)+
+    geom_text_repel(data = u[duplicated(u$name)==F & u$Ag_species != "", ],
+                    aes(x = x, y = y, label = Ag_species), color = "red", size = 2, max.overlaps = 100,
+                    min.segment.length = 0, max.iter = 10^6)+
+    scale_radius(name = "Abundance [%]", trans = "log10", range = c(1, 4))+
+    theme_facet(legend.position = "right",
+                strip.text.x = element_text(margin = margin(0.05,0,0.05,0, "cm")))+
+    scale_color_manual(values = my_blues)+
+    scale_shape_manual(values = c("T-" = "circle", "T+"="square"))
+```
+
+```{r, fig.width=12, fig.height=12}
+g
+```
+
+
+```{r}
+ggsave(filename = "g.pdf",
+       plot = g,
+       device = "pdf",
+       width = 8,
+       height = 6)
+```
+
+
+
+### Supplementar peptides
+
+```{r}
+ns$neoag <- ""
+ns$neoag[which(ns$CDR3b %in% "CASSSYGYTF")] <- "p15"
+ns$neoag[which(ns$CDR3b %in% "CASSWGSGANVLTF")] <- "p16"
+
+x <- betas_raw[betas_raw$key %in% betas$key[betas$patient == "Pt4"],]
+x$tumor <- ifelse(test = x$key %in% ns$key[ns$tumor=="T+"], yes = "T+", no = "T-")
+x$neag <- ''
+x$neag[x$key %in% ns$key[ns$neoag=="p15"]] <- "p15"
+x$neag[x$key %in% ns$key[ns$neoag=="p16"]] <- "p16"
+x <- x[x$key %in% unique(x$key[x$neag != ""]),]
+```
+
+

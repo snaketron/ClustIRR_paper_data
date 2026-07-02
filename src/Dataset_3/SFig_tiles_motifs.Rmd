@@ -1,0 +1,188 @@
+---
+title: "SFig_tiles"
+author: "SK"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+editor_options: 
+  markdown: 
+    wrap: 65
+---
+
+
+
+```{r}
+library(ggplot2)
+library(patchwork)
+library(ClustIRR)
+library(tidyr)
+```
+
+
+```{r}
+gcd <- get(load("gcd.RData"))
+ns <- gcd$node_summary
+ns$group <- NA
+ns$group[ns$dataset=="human_G"] <- "H"
+ns$group[ns$dataset=="mouse_G"] <- "M"
+ns$species <- ifelse(test = ns$group=="H", yes = "human", no = "mouse")
+ps <- get(load("ps.RData"))
+```
+
+
+```{r}
+bm <- ps$beta_mu
+bm <- merge(x = bm[bm$g==1, c("community", "mean", "L95", "H95")], 
+            y = bm[bm$g==2, c("community", "mean", "L95", "H95")], 
+            by = c("community"))
+
+gr <- gcd$graph
+gr <- delete_edge_attr(graph = gr, name = "chain")
+
+coms <- c()
+bm <- bm[order(bm$mean.x, decreasing = T),]
+coms <- c(coms, bm$community[1:2])
+bm <- bm[order(bm$mean.y, decreasing = T),]
+coms <- c(coms, bm$community[1:2])
+bm$overlap <- with(bm, L95.x <= H95.y & H95.x >= L95.y)
+```
+
+
+```{r}
+ns_h <- ns[ns$community %in% bm$community[which(bm$mean.x>=2)],]
+ns_m <- ns[ns$community %in% bm$community[which(bm$mean.y>=4)],]
+
+ags <- c("CMV", "EBV", "SARS-CoV-2", "InfluenzaA", "HIV-1", "HCV", "Mtb", 
+         "MCMV", "Trypanosoma cruzi", "LCMV")
+
+m <- do.call(cbind, lapply(X = ags, ns = ns_h, FUN = function(x, ns) {
+    y <- get_ag_species_hits(node_summary = ns, db = "vdjdb", ag_species = x)
+    n <- y$node_summary
+    n[,x] <- apply(X = n[,y$new_columns], MARGIN = 1, FUN = sum)
+    n[,y$new_columns] <- NULL
+    return(ifelse(test = n[,x] >0, yes = 1, no = 0))
+}))
+colnames(m) <- ags
+ns_h <- cbind(ns_h, data.frame(m))
+
+
+m <- do.call(cbind, lapply(X = ags, ns = ns_m, FUN = function(x, ns) {
+    y <- get_ag_species_hits(node_summary = ns, db = "vdjdb", ag_species = x)
+    n <- y$node_summary
+    n[,x] <- apply(X = n[,y$new_columns], MARGIN = 1, FUN = sum)
+    n[,y$new_columns] <- NULL
+    return(ifelse(test = n[,x] >0, yes = 1, no = 0))
+}))
+colnames(m) <- ags
+ns_m <- cbind(ns_m, data.frame(m))
+```
+
+
+```{r}
+m <- ns_h[,c("community", colnames(ns_h)[31:40])]
+m <- aggregate(.~community, data = m, FUN = sum)
+m_h <- m %>% pivot_longer(cols = -community, names_to = "variable", values_to = "value")
+m_h$species <- "human"
+
+m <- ns_m[,c("community", colnames(ns_m)[31:40])]
+m <- aggregate(.~community, data = m, FUN = sum)
+m_m <- m %>% pivot_longer(cols = -community, names_to = "variable", values_to = "value")
+m_m$species <- "mouse"
+
+m <- rbind(m_h, m_m)
+```
+
+
+```{r, fig.height=14, fig.width=3}
+m$variable <- gsub(pattern = "SARS\\.CoV\\.2", replacement = "SC2", x = m$variable)
+m$variable <- gsub(pattern = "InfluenzaA", replacement = "FLU", x = m$variable)
+m$variable <- gsub(pattern = "HIV\\.1", replacement = "HIV1", x = m$variable)
+m$variable <- gsub(pattern = "Trypanosoma\\.cruzi", replacement = "T. cruzi", x = m$variable)
+m$community <- factor(x = m$community, levels = rev(unique(m$community)))
+```
+
+
+
+```{r}
+w <- ns[ns$community %in% m$community, ]
+w$f <- 1
+w <- aggregate(f~TRAJ+community+species, data = w, FUN = sum)
+n <- aggregate(f~community, data = w, FUN = sum)
+n$n <- n$f
+n$f <- NULL
+w <- merge(x = w, y = n, by = "community")
+w$p <- w$f/w$n
+w <- w[order(w$p,decreasing = T),]
+w <- w[duplicated(w[,1])==F,]
+rm(n)
+w$community <- factor(x = w$community, levels = rev(unique(w$community)))
+```
+
+
+```{r, fig.height=14, fig.width=6}
+fig_ag <- ggplot(data = m)+
+    facet_wrap(~species, ncol = 1, scales = "free_y", space = "free_y")+
+    geom_tile(aes(x = variable, y = as.factor(community), fill = value), col = "white")+
+    geom_text(aes(x = variable, y = as.factor(community), label = value), size = 2)+
+    scale_fill_distiller(palette = "Spectral")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+          legend.position = "none")+
+    ylab(label = "Community ID")+
+    xlab(label = "Antigen")
+
+fig_u <- ggplot(data = w)+
+    facet_wrap(~species, ncol = 1, scales = "free_y", space = "free_y")+
+    geom_text(data = w, aes(x = "TRAJ\n usage\n [%]", y = as.factor(community),
+                            label = paste(gsub(pattern = "TRA", replacement = "", x = TRAJ), 
+                                          " ", round(p*100, digits = 1), "[%]")), size = 2)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+          legend.position = "none")
+
+fig <- (fig_ag|fig_u)+patchwork::plot_layout(widths = c(4, 1))
+fig
+```
+
+
+```{r, fig.height=14, fig.width=3}
+ggsave(plot = fig,
+       device = "pdf",
+       filename = "SFig_motifs_A.pdf",
+       width = 6,
+       height = 16)
+```
+
+
+```{r}
+fig_motif <- lapply(X = as.character(unique(m$community)), 
+                    FUN = ClustIRR::get_cdr3_motifs, 
+                    node_summary = gcd$node_summary)
+fig_motifs <- lapply(X = 1:length(fig_motif), 
+                     motifs = fig_motif, 
+                     l = as.character(unique(m$community)),
+                     FUN = function(x, l, motifs) {
+                         cat(x, "\n")
+                         u <- (motifs[[x]][[1]]+
+                                    theme(axis.text.x = element_blank(), 
+                                          axis.ticks.x = element_blank(), 
+                                          axis.title.x = element_blank()))|
+                             (motifs[[x]][[2]]+
+                                  ylab(label = "")+
+                                  theme(axis.text.x = element_blank(), 
+                                        axis.ticks.x = element_blank(), 
+                                        axis.title.x = element_blank()))
+                         return(u+ggtitle(label = "", subtitle = l[x]))
+})
+
+fig_motifs <- patchwork::wrap_plots(fig_motifs, ncol = 6)
+
+ggsave(plot = fig_motifs,
+       device = "pdf",
+       filename = "SFig_motifs_B.pdf",
+       width = 15,
+       height = 19)
+```
+
+
+
+

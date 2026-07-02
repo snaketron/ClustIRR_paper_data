@@ -1,0 +1,71 @@
+---
+title: "Manuscript figure 4"
+author: "SK"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+editor_options: 
+  markdown: 
+    wrap: 65
+---
+
+```{r}
+library(ClustIRR)
+library(ggplot2)
+library(ggforce)
+library(reshape2)
+library(dplyr)
+```
+
+
+```{r}
+gcd <- get(load("gcd.RData"))
+ns <- gcd$node_summary
+ns$clonotype_id <- paste0(ns$CDR3a, "+", ns$CDR3b)
+ns$group <- NA
+ns$group[ns$dataset=="human_G"] <- "H"
+ns$group[ns$dataset=="mouse_G"] <- "M"
+```
+
+
+```{r}
+cls <- reshape2::acast(data = ns, formula = clonotype_id~sample, value.var = "clone_size", fun.aggregate = sum)
+fig_cs_cls <- ClustIRR::get_cosine_similarity(com = cls)$g+
+    theme(legend.position = "top")+
+    guides(fill = guide_colourbar(barheight = 1, barwidth = 7))+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+fig_cs_coms <- ClustIRR::get_cosine_similarity(com = gcd$community_occupancy_matrix)$g+
+    theme(legend.position = "top")+
+    guides(fill = guide_colourbar(barheight = 1, barwidth = 7))+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+
+```{r}
+nrads <- ClustIRR::get_nrads(community_occupancy_matrix = gcd$community_occupancy_matrix)
+nrads$species <- ifelse(test = regexpr(pattern = "H", text = nrads$sample)!=-1, yes = "H", no = "M")
+
+fig_nrads <- ggplot(data = nrads)+
+    geom_line(aes(x = rank, y = norm.abundance, group = sample, col = species))+
+    scale_x_log10(name = "Rank")+
+    scale_y_log10(name = "Normalized abundance")+
+    annotation_logticks(base = 10, sides = "lb")+
+    scale_color_manual(name = "Sp.", values = c("purple", "orange"))+
+    theme(legend.position = "right")
+```
+
+
+```{r, fig.width=7.5, fig.height=3}
+fig_olga <- (fig_cs_cls|fig_cs_coms|fig_nrads)
+fig_olga <- fig_olga+patchwork::plot_annotation(tag_levels = 'A')
+fig_olga
+```
+
+```{r}
+ggsave(plot = fig_olga,
+       device = "pdf",
+       filename = "fig_4.pdf",
+       width = 7.5,
+       height = 3)
+```

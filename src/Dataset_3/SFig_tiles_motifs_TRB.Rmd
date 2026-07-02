@@ -1,0 +1,92 @@
+---
+title: "Manuscript figure 5"
+author: "SK"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+editor_options: 
+  markdown: 
+    wrap: 65
+---
+
+
+
+```{r}
+library(ggplot2)
+library(patchwork)
+library(tidyr)
+```
+
+
+```{r}
+gcd <- get(load("gcd.RData"))
+ns <- gcd$node_summary
+ns$group <- NA
+ns$group[ns$dataset=="human_G"] <- "H"
+ns$group[ns$dataset=="mouse_G"] <- "M"
+ps <- get(load("ps.RData"))
+```
+
+
+```{r}
+bm <- ps$beta_mu
+bm <- merge(x = bm[bm$g==1, c("community", "mean", "L95", "H95")], 
+            y = bm[bm$g==2, c("community", "mean", "L95", "H95")], 
+            by = c("community"))
+
+gr <- gcd$graph
+gr <- delete_edge_attr(graph = gr, name = "chain")
+
+coms <- c()
+bm <- bm[order(bm$mean.x, decreasing = T),]
+coms <- c(coms, bm$community[1:2])
+bm <- bm[order(bm$mean.y, decreasing = T),]
+coms <- c(coms, bm$community[1:2])
+bm$overlap <- with(bm, L95.x <= H95.y & H95.x >= L95.y)
+```
+
+```{r}
+cs <- gcd$community_summary
+sum(bm$community %in% cs$community[which(cs$n_edges_CDR3b > cs$n_edges_CDR3a)] & bm$overlap==F)
+bm$mean.y[bm$community %in% cs$community[which(cs$n_edges_CDR3b > cs$n_edges_CDR3a)] & bm$overlap==F]>
+    bm$mean.x[bm$community %in% cs$community[which(cs$n_edges_CDR3b > cs$n_edges_CDR3a)] & bm$overlap==F]
+
+x <- bm[bm$community %in% cs$community[which(cs$n_edges_CDR3b > cs$n_edges_CDR3a)] & bm$overlap==F,]
+```
+
+
+
+```{r}
+fig_motif <- lapply(X = as.character(unique(x$community)), 
+                    FUN = ClustIRR::get_cdr3_motifs, 
+                    node_summary = gcd$node_summary)
+fig_motifs <- lapply(X = 1:length(fig_motif), 
+                     motifs = fig_motif, 
+                     l = as.character(unique(m$community)),
+                     FUN = function(x, l, motifs) {
+                         cat(x, "\n")
+                         u <- (motifs[[x]][[1]]+
+                                  ylab(label = "")+
+                                  theme(axis.text.x = element_blank(), 
+                                        axis.ticks.x = element_blank(), 
+                                        axis.title.x = element_blank()))
+                         return(u+ggtitle(label = "", subtitle = l[x]))
+})
+
+sfig <- patchwork::wrap_plots(fig_motifs, ncol = 8)
+sfig
+```
+
+
+```{r}
+ggsave(plot = sfig,
+       device = "pdf",
+       filename = "SFig_motifs_C.pdf",
+       width = 10,
+       height = 19)
+```
+
+
+
+

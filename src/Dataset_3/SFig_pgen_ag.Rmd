@@ -1,0 +1,198 @@
+---
+title: "SFig_pgen_ag"
+author: "SK"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+editor_options: 
+  markdown: 
+    wrap: 65
+---
+
+
+
+```{r}
+library(ggplot2)
+library(ggforce)
+library(reshape2)
+library(dplyr)
+library(patchwork)
+```
+
+
+```{r}
+gcd <- get(load("gcd.RData"))
+ns <- gcd$node_summary
+ns$group <- NA
+ns$group[ns$dataset=="human_G"] <- "H"
+ns$group[ns$dataset=="mouse_G"] <- "M"
+ps <- get(load("ps.RData"))
+```
+
+
+```{r}
+get_mu_ag <- function(beta, node_summary, ag, ag_species = TRUE, db = "vdjdb") {
+    
+    if(ag_species) {
+        h <- get_ag_species_hits(node_summary = node_summary, 
+                                 db = db, 
+                                 ag_species = ag)
+    } else {
+        h <- get_ag_gene_hits(node_summary = node_summary, 
+                              db = db, 
+                              ag_gene = ag)
+    }
+
+    h$node_summary$spec <- ifelse(
+        test = apply(X = h$node_summary[,h$new_columns], MARGIN=1, FUN=sum)==0,
+        yes = FALSE, no = TRUE)
+    h <- h$node_summary
+    h$g <- ifelse(test = regexpr(pattern = "H", text = h$sample)!=-1, yes = 1, no = 2)
+    h <- merge(x = h, y = beta, by = c("g", "community"), all.x = TRUE)
+
+    ha <- aggregate(clone_size~community+g+mean+spec, data = h, FUN = sum)
+    ha$ag_clone_size <- ifelse(test = ha$spec == FALSE, yes = 0, no = ha$clone_size)
+    ha <- ha[order(ha$mean, decreasing = TRUE),]
+    ha$bin <- cut(ha$mean, breaks = seq(from = -2.5, to = 4.5, by = 1), 
+                  include.lowest = TRUE, right = TRUE)
+    ha_y <- aggregate(ag_clone_size~g+bin, data = ha, FUN = sum)
+    ha_n <- aggregate(clone_size~g+bin, data = ha, FUN = sum)
+    hab <- merge(x = ha_y, y = ha_n, by = c("g", "bin"))
+    hab$Ag <- ag
+    hab$p <- hab$ag_clone_size/hab$clone_size
+    return(hab)
+}
+```
+
+
+```{r}
+bm <- ps$beta_mu
+bm <- merge(x = bm[bm$g==1, c("community", "mean", "L95", "H95")], 
+            y = bm[bm$g==2, c("community", "mean", "L95", "H95")], 
+            by = c("community"))
+
+gr <- gcd$graph
+gr <- delete_edge_attr(graph = gr, name = "chain")
+
+coms <- c()
+bm <- bm[order(bm$mean.x, decreasing = T),]
+coms <- c(coms, bm$community[1:2])
+bm <- bm[order(bm$mean.y, decreasing = T),]
+coms <- c(coms, bm$community[1:2])
+bm$overlap <- with(bm, L95.x <= H95.y & H95.x >= L95.y)
+```
+
+
+
+```{r}
+ns_hs <- ns[ns$community %in% bm$community[bm$mean.x>=2 & bm$overlap == FALSE],]
+ns_mm <- ns[ns$community %in% bm$community[bm$mean.y>=4 & bm$overlap == FALSE],]
+```
+
+
+```{r}
+fig_hs_pgena <- ggplot()+
+    facet_wrap(facets = ~"Human CDR3a")+
+    geom_density(data = ns[which(ns$dataset == "human_G" & regexpr(pattern = "EBV", text = ns$Ag_species)!=-1),], 
+                 aes(col = "EBV", x = pgena))+
+    geom_density(data = ns[which(ns$dataset == "human_G" & regexpr(pattern = "CMV", text = ns$Ag_species)!=-1),], 
+                 aes(col = "CMV", x = pgena))+
+    geom_density(data = ns[which(ns$dataset == "human_G" & regexpr(pattern = "Influenza", text = ns$Ag_species)!=-1),], 
+                 aes(col = "FLU", x = pgena))+
+    geom_density(data = ns[which(ns$dataset == "human_G" & regexpr(pattern = "HIV\\-1|HIV1", text = ns$Ag_species)!=-1),], 
+                 aes(col = "HIV1", x = pgena))+
+    geom_density(data = ns[which(ns$dataset == "human_G" & regexpr(pattern = "M\\.tuberculosis|Mtb", text = ns$Ag_species)!=-1),], 
+                 aes(col = "Mtb", x = pgena))+
+    geom_density(data = ns[which(ns$dataset == "human_G" & regexpr(pattern = "SARS-CoV-2", text = ns$Ag_species)!=-1),], 
+                 aes(col = "SC2", x = pgena))+
+    geom_density(data = ns[which(ns$dataset == "human_G" & ns$Ag_species == ""),],
+                 aes(col = "?", x = pgena))+
+    geom_density(data = ns_hs, aes(col = "top-mu", x = pgena))+
+    scale_x_log10(name = expression(P[gen]))+
+    scale_color_discrete(name = "Ag")+
+    ylab(label = "Density")+
+    annotation_logticks(base = 10, sides = "b")+
+    theme(legend.position = "top")
+
+
+fig_hs_pgenb <- ggplot()+
+    facet_wrap(facets = ~"Human CDR3b")+
+    geom_density(data = ns[which(ns$dataset == "human_G" & regexpr(pattern = "EBV", text = ns$Ag_species)!=-1),], 
+                 aes(col = "EBV", x = pgenb))+
+    geom_density(data = ns[which(ns$dataset == "human_G" & regexpr(pattern = "CMV", text = ns$Ag_species)!=-1),], 
+                 aes(col = "CMV", x = pgenb))+
+    geom_density(data = ns[which(ns$dataset == "human_G" & regexpr(pattern = "Influenza", text = ns$Ag_species)!=-1),], 
+                 aes(col = "FLU", x = pgenb))+
+    geom_density(data = ns[which(ns$dataset == "human_G" & regexpr(pattern = "HIV\\-1|HIV1", text = ns$Ag_species)!=-1),], 
+                 aes(col = "HIV1", x = pgenb))+
+    geom_density(data = ns[which(ns$dataset == "human_G" & regexpr(pattern = "M\\.tuberculosis|Mtb", text = ns$Ag_species)!=-1),], 
+                 aes(col = "Mtb", x = pgenb))+
+    geom_density(data = ns[which(ns$dataset == "human_G" & regexpr(pattern = "SARS-CoV-2", text = ns$Ag_species)!=-1),], 
+                 aes(col = "SC2", x = pgenb))+
+    geom_density(data = ns[which(ns$dataset == "human_G" & ns$Ag_species == ""),],
+                 aes(col = "?", x = pgenb))+
+    geom_density(data = ns_hs, aes(col = "top-mu", x = pgenb))+
+    scale_x_log10(name = expression(P[gen]))+
+    scale_color_discrete(name = "Ag")+
+    ylab(label = "Density")+
+    annotation_logticks(base = 10, sides = "b")+
+    theme(legend.position = "top")
+
+
+fig_mm_pgena <- ggplot()+
+    facet_wrap(facets = ~"Mouse CDR3a")+
+    geom_density(data = ns[which(ns$dataset == "mouse_G" & regexpr(pattern = "MCMV", text = ns$Ag_species)!=-1),], 
+                 aes(col = "MCMV", x = pgena))+
+    geom_density(data = ns[which(ns$dataset == "mouse_G" & regexpr(pattern = "LCMV", text = ns$Ag_species)!=-1),], 
+                 aes(col = "LCMV", x = pgena))+
+    geom_density(data = ns[which(ns$dataset == "mouse_G" & regexpr(pattern = "Influenza", text = ns$Ag_species)!=-1),], 
+                 aes(col = "FLU", x = pgena))+
+    geom_density(data = ns[which(ns$dataset == "mouse_G" & regexpr(pattern = "Trypanosoma cruzi", text = ns$Ag_species)!=-1),], 
+                 aes(col = "T. cruzi", x = pgena))+
+    geom_density(data = ns[which(ns$dataset == "mouse_G" & ns$Ag_species == ""),],
+                 aes(col = "?", x = pgena))+
+    geom_density(data = ns_mm, aes(col = "top-mu", x = pgena))+
+    scale_x_log10(name = expression(P[gen]))+
+    scale_color_discrete(name = "Ag")+
+    ylab(label = "Density")+
+    annotation_logticks(base = 10, sides = "b")+
+    theme(legend.position = "top")
+
+
+fig_mm_pgenb <- ggplot()+
+    facet_wrap(facets = ~"Mouse CDR3b")+
+    geom_density(data = ns[which(ns$dataset == "mouse_G" & regexpr(pattern = "MCMV", text = ns$Ag_species)!=-1),], 
+                 aes(col = "MCMV", x = pgenb))+
+    geom_density(data = ns[which(ns$dataset == "mouse_G" & regexpr(pattern = "LCMV", text = ns$Ag_species)!=-1),], 
+                 aes(col = "LCMV", x = pgenb))+
+    geom_density(data = ns[which(ns$dataset == "mouse_G" & regexpr(pattern = "Influenza", text = ns$Ag_species)!=-1),], 
+                 aes(col = "FLU", x = pgenb))+
+    geom_density(data = ns[which(ns$dataset == "mouse_G" & regexpr(pattern = "Trypanosoma cruzi", text = ns$Ag_species)!=-1),], 
+                 aes(col = "T. cruzi", x = pgenb))+
+    geom_density(data = ns[which(ns$dataset == "mouse_G" & ns$Ag_species == ""),],
+                 aes(col = "?", x = pgenb))+
+    geom_density(data = ns_mm, aes(col = "top-mu", x = pgenb))+
+    scale_x_log10(name = expression(P[gen]))+
+    scale_color_discrete(name = "Ag")+
+    ylab(label = "Density")+
+    annotation_logticks(base = 10, sides = "b")+
+    theme(legend.position = "top")
+```
+
+
+```{r, fig.width=7, fig.height=10}
+fig <- (fig_hs_pgena|fig_hs_pgenb)/(fig_mm_pgena|fig_mm_pgenb)
+fig
+```
+
+
+
+```{r}
+ggsave(plot = fig,
+       device = "pdf",
+       filename = "SFig_pgen_ag.pdf",
+       width = 7,
+       height = 8)
+```
+

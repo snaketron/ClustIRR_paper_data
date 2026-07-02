@@ -1,0 +1,117 @@
+---
+title: "SFig_pgen"
+author: "SK"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+editor_options: 
+  markdown: 
+    wrap: 65
+---
+
+
+
+```{r}
+library(ggplot2)
+library(ggforce)
+library(reshape2)
+library(dplyr)
+library(patchwork)
+```
+
+
+# Figure PGEN
+
+```{r}
+gcd <- get(load("gcd.RData"))
+ps <- get(load("ps.RData"))
+```
+
+
+```{r}
+ns <- gcd$node_summary
+ns$sample <- gsub(pattern = "human", replacement = "hs", x = ns$sample)
+ns$sample <- gsub(pattern = "mouse", replacement = "mm", x = ns$sample)
+ns$pgenab <- ns$pgena*ns$pgenb
+ns$pgenab_max <- apply(X = ns[, c("pgena", "pgenb")], MARGIN = 1, FUN = max)
+ns$species <- ifelse(test = regexpr(pattern = "H", text = ns$sample)!=-1, 
+                     yes = "human", no = "mouse")
+ns$lpgena <- log10(ns$pgena)
+ns$lpgenb <- log10(ns$pgenb)
+```
+
+
+```{r}
+n <- aggregate(clone_size~community+species, data = ns, FUN = sum)
+ma <- aggregate(lpgena~community+species, data = ns, FUN = mean)
+mb <- aggregate(lpgenb~community+species, data = ns, FUN = mean)
+mab <- merge(x = ma, y = mb, by = c("community", "species"))
+mab <- merge(x = mab, y = n, by = c("community", "species"))
+rm(ma, mb)
+
+
+mab <- merge(x = mab, y = gcd$community_summary[,c("community", 
+                                                   "w_CDR3a", 
+                                                   "w_CDR3b",
+                                                   "n_edges_CDR3a",
+                                                   "n_edges_CDR3b")],
+            by = "community", all.x = TRUE)
+
+mab <- merge(x = mab, y = ps$alpha, by = "community", all.x = TRUE)
+mab$community_lpgen <- ifelse(test = mab$n_edges_CDR3a > mab$n_edges_CDR3b, 
+                              yes = mab$lpgena, no = mab$lpgenb)
+```
+
+
+```{r}
+mixed_coms <- apply(X = gcd$community_occupancy_matrix, MARGIN = 1, FUN = function(x) {
+    return(sum(x[1:5])!=0 & sum(x[6:10])!=0)
+})
+mab$mixed_community <- ifelse(test = mab$community %in% which(mixed_coms), yes = TRUE, no = FALSE)
+```
+
+
+```{r, fig.width=7, fig.height=7}
+fig_pgen <- ggplot(data = mab)+
+    geom_point(aes(y = community_lpgen, x = clone_size), size = 1.5, 
+               alpha = 0.7, shape = 21, fill = "black", color = "white")+
+    scale_x_log10()+
+    ylab(label = expression(log10(P[gen])))+
+    xlab(label = "Community size")+
+    annotation_logticks(base = 10, sides = "b")
+
+mab$chain <- ifelse(test = mab$n_edges_CDR3a>mab$n_edges_CDR3b,
+                    yes = "CDR3a", no = "CDR3b")
+g2 <- ggplot(data = mab[mab$clone_size>0,])+
+    geom_point(aes(y = mean, x = clone_size, col = species, shape = chain),
+               position = position_jitter(width = 0.01, height = 0), 
+               size = 1.5, alpha = 0.5)+
+    scale_x_log10()+
+    theme(legend.position = "top")+
+    ylab(label = expression(alpha))+
+    xlab(label = "Community size")+
+    scale_color_manual(name = "Species", values = c("purple", "orange"))+
+    scale_shape_discrete(name = "Chain")+
+    annotation_logticks(base = 10, sides = "b")
+```
+
+
+```{r, fig.width=7, fig.height=6.5}
+sfig_olga <- (fig_pgen/g2)+plot_annotation(tag_levels = 'A')
+sfig_olga
+```
+
+
+
+
+```{r}
+ggsave(plot = sfig_olga,
+       device = "pdf",
+       filename = "SFig_pgen.pdf",
+       width = 5,
+       height = 6)
+```
+
+
+

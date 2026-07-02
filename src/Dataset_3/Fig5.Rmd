@@ -1,0 +1,424 @@
+---
+title: "Manuscript figure 5"
+author: "SK"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+editor_options: 
+  markdown: 
+    wrap: 65
+---
+
+
+
+```{r}
+library(ggplot2)
+library(ggforce)
+library(reshape2)
+library(devtools)
+library(dplyr)
+library(RADanalysis)
+library(patchwork)
+library(ClustIRR)
+library(brms)
+library(igraph)
+```
+
+
+```{r}
+
+get_hdi <- function(vec, hdi_level) {
+    # Computes highest density interval from a sample of representative values,
+    # estimated as shortest credible interval.
+    # Arguments:
+    # sampleVec
+    # is a vector of representative values from a probability distribution.
+    # credMass
+    # is a scalar between 0 and 1, indicating the mass within the credible
+    # interval that is to be estimated.
+    # Value:
+    # HDIlim is a vector containing the limits of the HDI 
+    sortedPts <- sort(vec)
+    ciIdxInc <- floor(hdi_level * length(sortedPts))
+    nCIs = length(sortedPts) - ciIdxInc
+    ciWidth = rep(0 , nCIs)
+    for (i in 1:nCIs) {
+        ciWidth[i] = sortedPts[i + ciIdxInc] - sortedPts[i]
+    }
+    HDImin = sortedPts[which.min(ciWidth)]
+    HDImax = sortedPts[which.min(ciWidth) + ciIdxInc]
+    HDIlim = c(HDImin, HDImax)
+    return(HDIlim)
+}
+
+```
+
+
+```{r}
+gcd <- get(load("gcd.RData"))
+ns <- gcd$node_summary
+ns$group <- NA
+ns$group[ns$dataset=="human_G"] <- "H"
+ns$group[ns$dataset=="mouse_G"] <- "M"
+ps <- get(load("ps.RData"))
+```
+
+
+```{r}
+get_mu_ag <- function(beta,
+                      node_summary,
+                      ag,
+                      ag_species = TRUE,
+                      db = "vdjdb") {
+    
+    if(ag_species) {
+        h <- get_ag_species_hits(node_summary = node_summary, 
+                                 db = db, 
+                                 ag_species = ag)
+    } else {
+        h <- get_ag_gene_hits(node_summary = node_summary, 
+                              db = db, 
+                              ag_gene = ag)
+    }
+    
+    h$node_summary$spec <- ifelse(
+        test = apply(X = h$node_summary[,h$new_columns], MARGIN=1, FUN=sum)==0,
+        yes = FALSE, no = TRUE)
+    h <- h$node_summary
+    h$g <- ifelse(test = regexpr(pattern = "H", text = h$sample)!=-1, yes = 1, no = 2)
+    h <- merge(x = h, y = beta, by = c("g", "community"), all.x = TRUE)
+    
+    ha <- aggregate(clone_size~community+g+mean+spec, data = h, FUN = sum)
+    ha$ag_clone_size <- ifelse(test = ha$spec == FALSE, yes = 0, no = ha$clone_size)
+    ha <- ha[order(ha$mean, decreasing = TRUE),]
+    ha$bin <- cut(ha$mean, breaks = seq(from = -3, to = 5, by = 1), 
+                  include.lowest = TRUE, right = TRUE)
+    ha_y <- aggregate(ag_clone_size~g+bin, data = ha, FUN = sum)
+    ha_n <- aggregate(clone_size~g+bin, data = ha, FUN = sum)
+    hab <- merge(x = ha_y, y = ha_n, by = c("g", "bin"))
+    hab$Ag <- ag
+    hab$p <- hab$ag_clone_size/hab$clone_size
+    return(hab)
+}
+```
+
+
+```{r}
+cpg <- rbind(get_mu_ag(beta = ps$beta_mu, node_summary = ns, ag = "SARS-CoV-2", ag_species = T, db = "vdjdb"),
+             get_mu_ag(beta = ps$beta_mu, node_summary = ns,  ag = "CMV", ag_species = T, db = "vdjdb"),
+             get_mu_ag(beta = ps$beta_mu, node_summary = ns, ag = "EBV", ag_species = T, db = "vdjdb"),
+             get_mu_ag(beta = ps$beta_mu, node_summary = ns, ag = "HIV-1", ag_species = T, db = "vdjdb"),
+             get_mu_ag(beta = ps$beta_mu, node_summary = ns, ag = "HCV", ag_species = T, db = "vdjdb"),
+             get_mu_ag(beta = ps$beta_mu, node_summary = ns, ag = "Mtb", ag_species = T, db = "vdjdb"),
+             get_mu_ag(beta = ps$beta_mu, node_summary = ns, ag = "InfluenzaA", ag_species = T, db = "vdjdb"),
+             get_mu_ag(beta = ps$beta_mu, node_summary = ns, ag = "Trypanosoma cruzi", ag_species = T, db = "vdjdb"),
+             get_mu_ag(beta = ps$beta_mu, node_summary = ns, ag = "MCMV", ag_species = T, db = "vdjdb"),
+             get_mu_ag(beta = ps$beta_mu, node_summary = ns, ag = "LCMV", ag_species = T, db = "vdjdb"))
+```
+
+
+```{r}
+source("/mnt/nfs/simo/r_utils/Stats.R")
+cpg$row_id <- 1:nrow(cpg)
+fit <- brm(ag_clone_size | trials(clone_size) ~ 1 + (1 | row_id), 
+           data = cpg, family = binomial())
+post <- posterior_linpred(fit, transform = TRUE)  # expected probabilities
+p_est <- apply(post, 2, mean)
+cpg$p_est <- p_est
+
+hdi <- t(apply(post, 2, get_hdi, hdi_level = 0.95))
+cpg$p_lower <- hdi[,1]
+cpg$p_upper <- hdi[,2]
+cpg$species <- ifelse(test = cpg$g == 1, yes = "human", no = "mouse")
+
+cpg$bin_start <- as.numeric(do.call(rbind, strsplit(x = gsub(pattern = "\\(|\\)|\\[|\\]", 
+                                                             replacement = '', x = cpg$bin), 
+                                                    split = '\\,'))[,1])
+cpg$bin_fac <- gsub(pattern = "\\(", replacement = '[', x = cpg$bin)
+cpg$bin_fac <- gsub(pattern = "\\)", replacement = ']', x = cpg$bin_fac)
+cpg$bin_fac <- gsub(pattern = "\\,", replacement = ', ', x = cpg$bin_fac)
+cpg <- cpg[order(cpg$bin_start, decreasing = F),]
+cpg$bin_fac <- factor(x = cpg$bin_fac, levels = unique(cpg$bin_fac))
+rm(fit, post, p_est)
+
+cpg$Ag <- gsub(pattern = "SARS-CoV-2", replacement = "SC2", x = cpg$Ag)
+cpg$Ag <- gsub(pattern = "InfluenzaA", replacement = "FLU", x = cpg$Ag)
+cpg$Ag <- gsub(pattern = "HIV-1", replacement = "HIV1", x = cpg$Ag)
+cpg$Ag <- gsub(pattern = "Trypanosoma cruzi", replacement = "T. cruzi", x = cpg$Ag)
+```
+
+
+```{r, fig.width=6, fig.height=4}
+fig_cp <- ggplot(data = cpg)+
+    facet_wrap(~species, nrow = 1, scales = "free")+
+    geom_line(aes(x = bin_fac, y = p_est*100, col = Ag, group = Ag),
+              position = position_dodge(width = 0.6))+
+    geom_point(aes(x = bin_fac, y = p_est*100, col = Ag),
+              position = position_dodge(width = 0.6))+
+    geom_errorbar(aes(x = bin_fac, y = p_est*100, ymin = p_lower*100, 
+                      ymax = p_upper*100, col = Ag), width = 0,
+              position = position_dodge(width = 0.6))+
+    theme(legend.position = "top")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+    theme(strip.text = element_text(size = 9, margin = margin()))+
+    xlab(expression(beta[mu]))+
+    ylab("Abundance [%]")
+```
+
+
+```{r}
+fig_mu <- ggplot(data = ps$beta_mu)+
+    geom_hline(yintercept = seq(from = -2.5, to = 4.5, by = 1), 
+               linetype = "dashed", col = "darkgrey")+
+    geom_sina(aes(x = as.factor(g), y = mean), shape = 21, fill = "white", 
+              col = "black", size = 0.5, stroke = 0.08)+
+    theme_bw(base_size = 10)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+    scale_x_discrete(name = "", labels = c("human", "mouse"))+
+    ylab(label = expression(mu))
+```
+
+
+```{r, fig.width=6.2, fig.height=3.4}
+fig_AB <- (fig_mu|fig_cp)+patchwork::plot_layout(widths = c(0.5,2))
+fig_AB
+```
+
+
+
+```{r}
+bm <- ps$beta_mu
+bm <- merge(x = bm[bm$g==1, c("community", "mean", "L95", "H95")], 
+            y = bm[bm$g==2, c("community", "mean", "L95", "H95")], 
+            by = c("community"))
+
+gr <- gcd$graph
+gr <- delete_edge_attr(graph = gr, name = "chain")
+
+coms <- c()
+bm <- bm[order(bm$mean.x, decreasing = T),]
+coms <- c(coms, bm$community[1:2])
+bm <- bm[order(bm$mean.y, decreasing = T),]
+coms <- c(coms, bm$community[1:2])
+bm$overlap <- with(bm, L95.x <= H95.y & H95.x >= L95.y)
+```
+
+
+```{r}
+sgs <- subgraph(graph = gr, vids = which(V(gr)$community %in% coms))
+
+u <- ggnetwork(sgs, layout = igraph::layout_components(sgs))
+u <- u[order(u$clone_size, decreasing = T),]
+
+lu <- u[duplicated(u$name)==FALSE, ]
+
+l <- get_ag_species_hits(node_summary = lu, db = "vdjdb", ag_species = "CMV")
+lu[,"CMV"] <- apply(X = l$node_summary[,l$new_columns], MARGIN = 1, FUN = sum)
+
+l <- get_ag_species_hits(node_summary = lu, db = "vdjdb", ag_species = "EBV")
+lu[,"EBV"] <- apply(X = l$node_summary[,l$new_columns], MARGIN = 1, FUN = sum)
+
+l1 <- get_ag_species_hits(node_summary = lu, db = "vdjdb", ag_species = "Influenza")
+l2 <- get_ag_species_hits(node_summary = lu, db = "vdjdb", ag_species = "InfluenzaA")
+lu[,"Influenza"] <- apply(X = l1$node_summary[,l1$new_columns], MARGIN = 1, FUN = sum)+
+    apply(X = l2$node_summary[,l2$new_columns], MARGIN = 1, FUN = sum)
+
+l1 <- get_ag_species_hits(node_summary = lu, db = "vdjdb", ag_species = "M.Tuberculosis")
+l2 <- get_ag_species_hits(node_summary = lu, db = "vdjdb", ag_species = "Mtb")
+lu[,"Mtb"] <- apply(X = l1$node_summary[,l1$new_columns], MARGIN = 1, FUN = sum)+
+    apply(X = l2$node_summary[,l2$new_columns], MARGIN = 1, FUN = sum)
+
+l <- get_ag_species_hits(node_summary = lu, db = "vdjdb", ag_species = "SARS-CoV-2")
+lu[,"SC2"] <- apply(X = l$node_summary[,l$new_columns], MARGIN = 1, FUN = sum)
+
+l <- get_ag_species_hits(node_summary = lu, db = "vdjdb", ag_species = "MCMV")
+lu[,"MCMV"] <- apply(X = l$node_summary[,l$new_columns], MARGIN = 1, FUN = sum)
+
+l <- get_ag_species_hits(node_summary = lu, db = "vdjdb", ag_species = "LCMV")
+lu[,"LCMV"] <- apply(X = l$node_summary[,l$new_columns], MARGIN = 1, FUN = sum)
+
+l <- get_ag_species_hits(node_summary = lu, db = "vdjdb", ag_species = "Trypanosoma cruzi")
+lu[,"TC"] <- apply(X = l$node_summary[,l$new_columns], MARGIN = 1, FUN = sum)
+
+l <- get_ag_species_hits(node_summary = lu, db = "vdjdb", ag_species = "HIV-1")
+lu[,"HIV1"] <- apply(X = l$node_summary[,l$new_columns], MARGIN = 1, FUN = sum)
+
+l <- get_ag_species_hits(node_summary = lu, db = "vdjdb", ag_species = "HCV")
+lu[,"HCV"] <- apply(X = l$node_summary[,l$new_columns], MARGIN = 1, FUN = sum)
+rm(l,l1,l2)
+
+
+# tidy up antigens
+lu$Ag_species <- gsub(pattern = "M.Tuberculosis", replacement = "Mtb", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "InfluenzaA", replacement = "FLU", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "Influenza", replacement = "FLU", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "influenza A", replacement = "FLU", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "FLU,FLU", replacement = "FLU", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "Trypanosoma cruzi", replacement = "T. cruzi", x = lu$Ag_species)
+
+lu$Ag_species[which(lu$db_vdjdb_CDR3a==0 & lu$db_vdjdb_CDR3b==0)] <- ""
+
+lu$Ag_species <- gsub(pattern = "Human immunodeficiency virus \\(HIV\\)", replacement = "", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "HomoSapiens", replacement = "Hs", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "Rheumatoid Arthritis \\(RA\\)", replacement = "", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "MusMusculus", replacement = "Mm", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "Diabetes Type 1", replacement = "", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "Alzheimer's disease", replacement = "", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "FLU,EBV,FLU", replacement = "EBV,FLU", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "FLU,FLU", replacement = "FLU", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = ",Melanoma", replacement = "", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "Melanoma", replacement = "", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = ",Carcinoma", replacement = "", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "Neoantigen", replacement = "", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "Tick-borne encephalitis", replacement = "TBE", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "Tumor associated antigen \\(TAA\\)", replacement = "TAA", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "MCMV,mCMV", replacement = "MCMV", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "Systemic Lupus Erythematosus \\(SLE\\)", replacement = "SLE", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "FLU,MCMV,FLU", replacement = "FLU,MCMV", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "LCMV,", replacement = "LCMV", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "FLU,SLE,FLU", replacement = "FLU,SLE", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "CMV,FLU,TAA,FLU", replacement = "CMV,FLU,TAA", x = lu$Ag_species)
+lu$Ag_species <- gsub(pattern = "T\\. cruzi", replacement = "T.cruzi", x = lu$Ag_species)
+lu$Ag_species[lu$Ag_species=="Hs,"] <- "Hs"
+lu$Ag_species[lu$Ag_species=="CMV,"] <- "CMV"
+
+
+lu$key_bin <- ifelse(test = lu$db_vdjdb_CDR3a!=0 | lu$db_vdjdb_CDR3b!=0, yes = T, no = F)
+lu$key_bin <- ifelse(test = duplicated(lu$community)==F, yes = T, no = F)
+```
+
+
+```{r, fig.width=8, fig.height=8}
+fig_graph <- ggplot()+
+    geom_edges(data = u, aes(x = x, y = y, xend = xend, yend = yend),
+               color = "darkgrey", linewidth = 0.05, alpha = 0.5)+
+    geom_nodes(data = lu, aes(x = x, y = y, fill = sample, color = key_bin), alpha = 0.85, shape = 21)+
+    ggrepel::geom_text_repel(data = lu[lu$key_bin==T,], 
+                        aes(x = x, y = y, label = community), 
+                        min.segment.length = 0, size = 2, max.iter = 10^5,
+                        max.overlaps = 100)+
+    theme_facet(legend.position = "right",
+                strip.text.x = element_text(margin = margin(0.05,0,0.05,0, "cm")))+
+    scale_color_manual(values = c("white", "black"))+
+    scale_fill_manual(values = c(
+  "H1"="#FEE0D2", "H2"="#FC9272", "H3"="#FB6A4A", "H4"="#DE2D26", "H5"="#A50F15",
+  "M1"="#EFF3FF", "M2"="#BDD7E7", "M3"="#6BAED6", "M4"="#3182BD", "M5"="#08519C"
+))
+
+fig_graph
+```
+
+
+
+```{r}
+fig_ABC <- (fig_AB/fig_graph)+patchwork::plot_layout(heights = c(1,3.35))
+
+ggsave(plot = fig_ABC,
+       device = "pdf",
+       filename = "fig_5.pdf",
+       width = 7,
+       height = 6.5)
+```
+
+
+
+```{r}
+fig_motif <- lapply(X = sort(coms, decreasing = F), 
+                    FUN = ClustIRR::get_cdr3_motifs, 
+                    node_summary = gcd$node_summary)
+fig_motif <- patchwork::wrap_plots(fig_motif, ncol = 1)
+fig_motif
+
+ggsave(plot = fig_motif,
+       device = "pdf",
+       filename = "fig_5b.pdf",
+       width = 5,
+       height = 4)
+```
+
+
+```{r}
+trbv <- lu %>%
+  group_by(TRBV, community) %>%
+  summarise(clone_size = sum(clone_size), .groups = "drop") %>%
+  group_by(community) %>%
+  mutate(p = 100*clone_size / sum(clone_size))
+
+trbj <- lu %>%
+  group_by(TRBJ, community) %>%
+  summarise(clone_size = sum(clone_size), .groups = "drop") %>%
+  group_by(community) %>%
+  mutate(p = 100*clone_size / sum(clone_size))
+
+trav <- lu %>%
+  group_by(TRAV, community) %>%
+  summarise(clone_size = sum(clone_size), .groups = "drop") %>%
+  group_by(community) %>%
+  mutate(p = 100*clone_size / sum(clone_size))
+
+traj <- lu %>%
+  group_by(TRAJ, community) %>%
+  summarise(clone_size = sum(clone_size), .groups = "drop") %>%
+  group_by(community) %>%
+  mutate(p = 100*clone_size / sum(clone_size))
+
+fig_trbv <- ggplot()+
+    facet_wrap(~"TRBV")+
+    geom_sina(data = trbv, aes(x = as.factor(community), y = p), size = 0.5)+
+    ggrepel::geom_text_repel(data = trbv %>% group_by(community) %>% slice_max(order_by = p, n = 1),
+              aes(x = as.factor(community), y = p, label = TRBV), size = 2, min.segment.length = 0)+
+    ylab(label = "Usage [%]")+
+    xlab(label = "Community")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+fig_trbj <- ggplot()+
+    facet_wrap(~"TRBJ")+
+    geom_sina(data = trbj, aes(x = as.factor(community), y = p), size = 0.5)+
+    ggrepel::geom_text_repel(data = trbj %>% group_by(community) %>% slice_max(order_by = p, n = 1),
+              aes(x = as.factor(community), y = p, label = TRBJ), size = 2, min.segment.length = 0)+
+    ylab(label = "Usage [%]")+
+    xlab(label = "Community")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+fig_trav <- ggplot()+
+    facet_wrap(~"TRAV")+
+    geom_sina(data = trav, aes(x = as.factor(community), y = p), size = 0.5)+
+    ggrepel::geom_text_repel(data = trav %>% group_by(community) %>% slice_max(order_by = p, n = 1),
+              aes(x = as.factor(community), y = p, label = TRAV), size = 2, min.segment.length = 0)+
+    ylab(label = "Usage [%]")+
+    xlab(label = "Community")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+fig_traj <- ggplot()+
+    facet_wrap(~"TRAJ")+
+    geom_sina(data = traj, aes(x = as.factor(community), y = p), size = 0.5)+
+    ggrepel::geom_text_repel(data = traj %>% group_by(community) %>% slice_max(order_by = p, n = 1),
+              aes(x = as.factor(community), y = p, label = TRAJ), size = 2, min.segment.length = 0)+
+    ylab(label = "Usage [%]")+
+    xlab(label = "Community")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+fig_usage <- (fig_trbv|fig_trbj)/
+    (fig_trav|fig_traj)
+
+ggsave(plot = fig_usage,
+       device = "pdf",
+       filename = "fig_5c.pdf",
+       width = 3.3,
+       height = 3.5)
+```
+
+
+```{r}
+fig_DE <- (fig_motif|fig_usage)+patchwork::plot_layout(widths = c(1.7,1))
+
+ggsave(plot = fig_DE,
+       device = "pdf",
+       filename = "fig_5DE.pdf",
+       width = 7.2,
+       height = 3.5)
+```
+
+

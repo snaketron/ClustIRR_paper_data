@@ -7,13 +7,13 @@ library(patchwork)
 library(dplyr)
 library(ClustIRR)
 
-ps <- get(load(file = "res/ps.RData"))
+ps <- get(load(file = "ps.RData"))
 bs <- ps$beta
 bs$sample[bs$sample=="MART1"] <- "M"
 bs$sample[bs$sample=="EBV"] <- "E"
 bs <- bs %>% group_by(sample) %>% mutate(rank = rank(-mean, ties.method = "first")) %>% ungroup()
 
-gcd <- get(load(file = "res/gcd.RData"))
+gcd <- get(load(file = "gcd.RData"))
 ns <- gcd$node_summary
 ns$sample[ns$sample=="MART1"] <- "M"
 ns$sample[ns$sample=="EBV"] <- "E"
@@ -107,12 +107,12 @@ library(patchwork)
 library(dplyr)
 library(ClustIRR)
 
-gcd <- get(load(file = "res/gcd.RData"))
+gcd <- get(load(file = "gcd.RData"))
 com <- gcd$community_occupancy_matrix
 colnames(com)[colnames(com) == "EBV"] <- "E"
 colnames(com)[colnames(com) == "MART1"] <- "M"
 
-ps <- get(load(file = "res/ps.RData"))
+ps <- get(load(file = "ps.RData"))
 bs <- ps$beta
 bs$sample[bs$sample=="MART1"] <- "M"
 bs$sample[bs$sample=="EBV"] <- "E"
@@ -177,7 +177,7 @@ Fig_1D <- ggplot(data = v)+
 
 Fig_1 <- (Fig_1A|Fig_1B)/(Fig_1D|Fig_1C)
 
-ggsave(filename = "manuscript/Fig_1.pdf",
+ggsave(filename = "Fig_1.pdf",
        plot = Fig_1,
        device = "pdf",
        width = 13,

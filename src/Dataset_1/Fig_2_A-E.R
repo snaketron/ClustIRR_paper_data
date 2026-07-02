@@ -1,12 +1,11 @@
 ###### BTD ######
-.libPaths(new = "/mnt/nfs/simo/rpack_4_4/")
 library(scBubbletree)
 library(ggplot2)
 library(patchwork)
 library(dplyr)
 library(Seurat)
 
-btd_input <- get(load("data/GEX/processed/btd_input.RData"))
+btd_input <- get(load("btd_input.RData"))
 A <- btd_input$A
 
 btd <- get_bubbletree_graph(x = A,
@@ -22,35 +21,33 @@ btd <- get_bubbletree_graph(x = A,
                             show_simple_count = FALSE)
 
 btd$tree
-
-save(btd, file = "data/GEX/processed/btd.RData", compress = TRUE)
+save(btd, file = "btd.RData", compress = TRUE)
 
 
 
 
 ###### heatmaps ######
-.libPaths(new = "/mnt/nfs/simo/rpack_4_4/")
 library(scBubbletree)
 library(ggplot2)
 library(patchwork)
 library(ClustIRR)
 
 # BTD/GEX data
-btd_input <- get(load("data/GEX/processed/btd_input.RData"))
-d <- get(load("data/GEX/processed/d_final.RData"))
-btd <- get(load("data/GEX/processed/btd.RData"))
+btd_input <- get(load("btd_input.RData"))
+d <- get(load("d_final.RData"))
+btd <- get(load("btd.RData"))
 e <- btd_input$e
 symbols <- btd_input$symbols
 m <- btd_input$m
 
 # GCD data
-gcd <- get(load(file = "res/gcd.RData"))
+gcd <- get(load(file = "gcd.RData"))
 ns <- gcd$node_summary
 ns$sample <- gsub(pattern = "EBV", replacement = 'E', x = ns$sample)
 ns$sample <- gsub(pattern = "MART1", replacement = 'M', x = ns$sample)
 
 # betas
-ps <- get(load(file = "res/ps.RData"))
+ps <- get(load(file = "ps.RData"))
 beta <- ps$beta
 beta <- beta[order(beta$mean, decreasing = T),]
 
@@ -123,7 +120,7 @@ g_top <- (btd$tree|g_s_v$plot|g_s_h$plot|g_tca$plot|g_phase$plot)+
 
 
 ggsave(plot = g_top,
-       filename = "manuscript/Fig_2.pdf",
+       filename = "Fig_2.pdf",
        device = "pdf",
        width = 9,
        height = 2.4)
